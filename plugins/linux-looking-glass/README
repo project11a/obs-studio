@@ -1,0 +1,6 @@
+Linux Looking Glass capture plugin
+
+Directly connect to your virtual machines ivshmem device for display capture.
+
+References:
+- https://github.com/gnif/LookingGlass/blob/master/client/src/main.c
