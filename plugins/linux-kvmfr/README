@@ -1,0 +1,7 @@
+Linux KVM FrameRelay capture plugin
+
+Directly connect to your virtual machines ivshmem device for display capture.
+Compatible KVMFR version: 8 - Looking Glass Host release A12
+
+References:
+- https://github.com/gnif/LookingGlass/blob/master/client/src/main.c
