@@ -30,6 +30,7 @@ Place, Suite 330, Boston, MA 02111-1307 USA
 
 #include <obs-module.h>
 #include <util/dstr.h>
+#include <util/bmem.h>
 
 #include "KVMFR.h"
 
@@ -51,6 +52,16 @@ struct lg_data {
 	int_fast32_t     height;
 
 	gs_texture_t     *texture;
+	
+	gs_texture_t     *cursor_texture;
+	uint8_t          *cursor_image;
+	bool             cursor_visible;
+	bool             cursor_mono;
+	int_fast32_t     cursor_x;
+	int_fast32_t     cursor_y;
+	int_fast32_t     cursor_w;
+	int_fast32_t     cursor_h;
+	int_fast32_t     cursor_version;
 
 	bool             show_cursor;
 };
@@ -95,9 +106,8 @@ static inline void lg_resize_texture(struct lg_data *data,
 /**
  * Map the shared memory file
  */
-static void * map_memory(void *vptr)
+static void * map_memory(struct lg_data *data)
 {
-	LG_DATA(vptr);
 	struct stat st;
 
 	if (!data->shmSize) {
@@ -140,6 +150,135 @@ static const char* lg_getname(void *unused)
 }
 
 /**
+ * Convert cursor texture and load it
+ */
+static void lg_fetch_cursor(struct lg_data *data, struct KVMFRCursor *header)
+{
+	const uint32_t *src = (const uint32_t *)data->header + header->dataPos;
+	const uint8_t *dest = (const uint8_t *)src;
+	uint8_t *srcAnd;
+	uint8_t *srcXor;
+	//uint32_t andMask, xorMask;
+	uint8_t mask;
+	int width = header->width;
+	int height = header->height;
+	
+	if (data->cursor_w != header->width ||
+	    data->cursor_h != header->height) {
+		if (data->cursor_image) bfree(data->cursor_image);
+		data->cursor_image = bmalloc(width * height * 4);
+	}
+	uint32_t *texture = (uint32_t *)data->cursor_image;
+	
+	data->cursor_mono = false;
+	
+	switch (header->type) {
+	case CURSOR_TYPE_MONOCHROME:
+		height = height / 2;
+		for (int y = 0; y < height; ++y) {
+			for (int x = 0; x < width; ++x) {
+				srcAnd = dest + (width/8 * y) + (x / 8);
+				srcXor = srcAnd + width/8 * height;
+				mask = 0x80 >> (x % 8);
+				if (*srcXor & mask) {
+					texture[y * width + x] = 0xFFFFFFFF;
+				} else {
+					texture[y * width + x] = 0x00000000;
+				}
+			}
+		}
+		dest = data->cursor_image;
+		//data->cursor_mono = true;
+		break;
+	case CURSOR_TYPE_MASKED_COLOR:
+		for (int i = 0; i < width * height; ++i) {
+			texture[i] = (src[i] & ~0xFF000000) |
+			             (src[i] & 0xFF000000 ? 0x0 : 0xFF000000);
+		}
+		dest = data->cursor_image;
+		break;
+	}
+	obs_enter_graphics();
+	if (data->cursor_w != width ||
+	    data->cursor_h != height) {
+		if (data->cursor_texture) {
+			gs_texture_destroy(data->cursor_texture);
+		}
+		data->cursor_w = width;
+		data->cursor_w = height;
+		data->cursor_texture = gs_texture_create(width, height,
+		                                         GS_BGRA, 1, NULL, 
+		                                         GS_DYNAMIC);
+	}
+	gs_texture_set_image(data->cursor_texture, dest,
+	                     width*4, false);
+	obs_leave_graphics();
+	
+}
+
+/**
+ * Prepare the capture data
+ */
+static void lg_video_tick_frame(struct lg_data *data)
+{
+	KVMFRFrame header;
+	// we must take a copy of the header to prevent the contained
+	// arguments from being abused to overflow buffers.
+	memcpy(&header,
+	       &data->header->frame, sizeof(struct KVMFRFrame));
+	// tell the host to continue as the host buffers up to one frame
+	// we can be sure the data for this frame wont be touched
+	__sync_and_and_fetch(&data->header->frame.flags,
+		             ~KVMFR_FRAME_FLAG_UPDATE);
+
+	obs_enter_graphics();
+	if (header.width != data->width || header.height != data->height) {
+		lg_resize_texture(data, &header);
+	}
+	gs_texture_set_image(data->texture,
+	                     (const uint8_t *)data->header + header.dataPos,
+	                     header.pitch, false);
+	obs_leave_graphics();
+}
+static void lg_video_tick_cursor(struct lg_data *data)
+{
+	KVMFRCursor header;
+	// update cursor position
+	if (data->header->cursor.flags && KVMFR_CURSOR_FLAG_POS) {
+		data->cursor_x = data->header->cursor.x;
+		data->cursor_y = data->header->cursor.y;
+		__sync_and_and_fetch(&data->header->cursor.flags,
+		                     ~KVMFR_CURSOR_FLAG_POS);
+	}
+	// update cursor
+	if (!(data->header->cursor.flags && KVMFR_CURSOR_FLAG_UPDATE)) return;
+	memcpy(&header,
+	       &data->header->cursor, sizeof(struct KVMFRCursor));
+	data->header->cursor.flags = 0;
+	if (header.flags & KVMFR_CURSOR_FLAG_SHAPE &&
+	    data->cursor_version != header.version) {
+		lg_fetch_cursor(data, &header);
+	}
+	data->cursor_visible = header.flags & KVMFR_CURSOR_FLAG_VISIBLE;
+}
+static void lg_video_tick(void *vptr, float seconds)
+{
+	LG_DATA(vptr);
+	UNUSED_PARAMETER(seconds);
+
+	if (!obs_source_showing(data->source))
+		return;
+	if (!data->texture)
+		return;
+	
+	if (data->header->frame.flags & KVMFR_FRAME_FLAG_UPDATE)
+		lg_video_tick_frame(data);
+	
+	if (data->show_cursor) lg_video_tick_cursor(data);
+	
+}
+
+/**
  * Stop the capture
  */
 static void lg_capture_stop(struct lg_data *data)
@@ -150,8 +289,16 @@ static void lg_capture_stop(struct lg_data *data)
 		gs_texture_destroy(data->texture);
 		data->texture = NULL;
 	}
+	if (data->cursor_texture) {
+		gs_texture_destroy(data->cursor_texture);
+		data->cursor_texture = NULL;
+	}
+	data->cursor_visible = false;
 
 	obs_leave_graphics();
+	
+	if (data->cursor_image) bfree(data->cursor_image);
+	data->cursor_image = NULL;
 
 	if (data->header) {
 		munmap(data->header, data->shmSize);
@@ -165,7 +312,7 @@ static void lg_capture_stop(struct lg_data *data)
  */
 static void lg_capture_start(struct lg_data *data)
 {
-	KVMFRFrame header;
+	KVMFRCursor cursor;
 
 	// get the memory ready
 	data->header = (struct KVMFRHeader *) map_memory(data);
@@ -174,8 +321,8 @@ static void lg_capture_start(struct lg_data *data)
 		goto fail;
 	}
 
-	/* this should fetch the cursor shape
-	__sync_or_and_fetch(&data->header->flags, KVMFR_HEADER_FLAG_RESTART); */
+	//this should fetch the cursor shape
+	__sync_or_and_fetch(&data->header->flags, KVMFR_HEADER_FLAG_RESTART);
 
 	// check the header's magic and version are valid
 	if (memcmp(data->header->magic,
@@ -195,10 +342,18 @@ static void lg_capture_start(struct lg_data *data)
 	}
 
 	// create texture
-	memcpy(&header, &data->header->frame, sizeof(struct KVMFRFrame));
+	data->height = 0;
+	memcpy(&cursor, &data->header->cursor, sizeof(struct KVMFRCursor));
 	obs_enter_graphics();
-	lg_resize_texture(data, &header);
+	if (data->show_cursor) {
+		data->cursor_w = 1;
+		data->cursor_w = 1;
+		data->cursor_texture = gs_texture_create(1, 1,
+		                                         GS_BGRA, 1, NULL,
+		                                         GS_DYNAMIC);
+	}
 	obs_leave_graphics();
+	lg_video_tick_frame(data); // this will initialize the texture data
 
 	return;
 
@@ -267,11 +422,8 @@ static void lg_destroy(void *vptr)
 {
 	LG_DATA(vptr);
 
-	if (data->header) {
-		munmap(data->header, data->shmSize);
-		close(data->shmFD);
-		data->header = NULL;
-	}
+	lg_capture_stop(data);
+	if( data->shmFile ) bfree(data->shmFile);
 
 	bfree(data);
 }
@@ -291,52 +443,32 @@ static void *lg_create(obs_data_t *settings, obs_source_t *source)
 }
 
 /**
- * Prepare the capture data
- */
-static void lg_video_tick(void *vptr, float seconds)
-{
-	KVMFRFrame header;
-	LG_DATA(vptr);
-	UNUSED_PARAMETER(seconds);
-
-	if (!obs_source_showing(data->source))
-		return;
-	if (!data->texture)
-		return;
-
-	if (!(data->header->frame.flags & KVMFR_FRAME_FLAG_UPDATE)) return;
-
-	// we must take a copy of the header to prevent the contained
-	// arguments from being abused to overflow buffers.
-	memcpy(&header, &data->header->frame, sizeof(struct KVMFRFrame));
-	// tell the host to continue as the host buffers up to one frame
-	// we can be sure the data for this frame wont be touched
-	__sync_and_and_fetch(&data->header->frame.flags,
-	                     ~KVMFR_FRAME_FLAG_UPDATE);
-
-	// sainty check of the frame format
-	if (
-		header.type    >= FRAME_TYPE_MAX ||
-		header.width   == 0 ||
-		header.height  == 0 ||
-		header.dataPos > data->shmSize ||
-		header.pitch   < header.width
-	) return;
-
-	obs_enter_graphics();
-	if (header.width != data->width || header.height != data->height) {
-		lg_resize_texture(data, &header);
-	}
-	gs_texture_set_image(data->texture,
-	                     (const uint8_t *)data->header + header.dataPos,
-	                     header.pitch, false);
-	obs_leave_graphics();
-
-}
-
-/**
  * Render the capture data
  */
+static void lg_video_render_cursor(struct lg_data *data, gs_effect_t *effect)
+{
+	gs_eparam_t *image = gs_effect_get_param_by_name(effect, "image");
+	gs_effect_set_texture(image, data->cursor_texture);
+
+	gs_blend_state_push();
+	if (data->cursor_mono) {
+		gs_blend_function_separate(GS_BLEND_INVDSTCOLOR,
+		                           GS_BLEND_INVDSTCOLOR,
+		                           GS_BLEND_SRCALPHA,
+		                           GS_BLEND_INVSRCALPHA);
+	} else {
+		gs_blend_function(GS_BLEND_SRCALPHA, GS_BLEND_INVSRCALPHA);
+	}
+	gs_enable_color(true, true, true, false);
+
+	gs_matrix_push();
+	gs_matrix_translate3f(data->cursor_x, data->cursor_y, 0.0f);
+	gs_draw_sprite(data->cursor_texture, 0, 0, 0);
+	gs_matrix_pop();
+
+	gs_enable_color(true, true, true, true);
+	gs_blend_state_pop();
+}
 static void lg_video_render(void *vptr, gs_effect_t *effect)
 {
 	LG_DATA(vptr);
@@ -353,8 +485,12 @@ static void lg_video_render(void *vptr, gs_effect_t *effect)
 		gs_draw_sprite(data->texture, 0, 0, 0);
 	}
 
-	/*if (data->show_cursor) {
-	}*/
+	if (data->cursor_visible) {
+		effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+		while (gs_effect_loop(effect, "Draw")) {
+			lg_video_render_cursor(data, effect);
+		}
+	}
 }
 
 /**
