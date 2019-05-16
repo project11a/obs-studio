@@ -56,7 +56,7 @@ struct lg_data {
 	gs_texture_t     *cursor_texture;
 	uint8_t          *cursor_image;
 	bool             cursor_visible;
-	bool             cursor_mono;
+	gs_texture_t     *cursor_mono;
 	int_fast32_t     cursor_x;
 	int_fast32_t     cursor_y;
 	int_fast32_t     cursor_w;
@@ -154,41 +154,57 @@ static const char* lg_getname(void *unused)
  */
 static void lg_fetch_cursor(struct lg_data *data, struct KVMFRCursor *header)
 {
-	const uint32_t *src = (const uint32_t *)data->header + header->dataPos;
-	const uint8_t *dest = (const uint8_t *)src;
-	uint8_t *srcAnd;
-	uint8_t *srcXor;
-	//uint32_t andMask, xorMask;
+	const uint8_t *dest = (const uint8_t *)data->header + header->dataPos;
+	const uint32_t *src = (const uint32_t *)dest;
 	uint8_t mask;
 	int width = header->width;
 	int height = header->height;
 	
-	if (data->cursor_w != header->width ||
-	    data->cursor_h != header->height) {
-		if (data->cursor_image) bfree(data->cursor_image);
-		data->cursor_image = bmalloc(width * height * 4);
+	if (header->type == CURSOR_TYPE_MONOCHROME) {
+		if (data->cursor_w != width ||
+		    data->cursor_h != height/2) {
+			if (data->cursor_image) bfree(data->cursor_image);
+			data->cursor_image = bmalloc(width * height * 4);
+		}
+	} else {
+		if (data->cursor_w != width ||
+		    data->cursor_h != height) {
+			if (data->cursor_image) bfree(data->cursor_image);
+			data->cursor_image = bmalloc(width * height * 4);
+		}
 	}
 	uint32_t *texture = (uint32_t *)data->cursor_image;
 	
-	data->cursor_mono = false;
 	
 	switch (header->type) {
 	case CURSOR_TYPE_MONOCHROME:
 		height = height / 2;
-		for (int y = 0; y < height; ++y) {
-			for (int x = 0; x < width; ++x) {
-				srcAnd = dest + (width/8 * y) + (x / 8);
-				srcXor = srcAnd + width/8 * height;
-				mask = 0x80 >> (x % 8);
-				if (*srcXor & mask) {
-					texture[y * width + x] = 0xFFFFFFFF;
-				} else {
-					texture[y * width + x] = 0x00000000;
-				}
+		for (int i = 0; i < width*height; ++i) {
+			mask = 0x80 >> (i & 7);
+			if (!(dest[i/8] & mask)) {
+				texture[i] = 0xFF000000;
+			} else {
+				texture[i] = 0x00000000;
+			}
+		}
+		for (int i = width*height; i < 2*width*height; ++i) {
+			mask = 0x80 >> (i & 7);
+			if (dest[(i)/8] & mask) {
+				texture[i] = 0xFFFFFFFF;
+			} else {
+				texture[i] = 0x00000000;
 			}
 		}
 		dest = data->cursor_image;
-		//data->cursor_mono = true;
+		obs_enter_graphics();
+		if (!data->cursor_mono) {
+			data->cursor_mono = gs_texture_create(width, height,
+		                                              GS_BGRA, 1, NULL, 
+		                                              GS_DYNAMIC);
+		}
+		gs_texture_set_image(data->cursor_mono,
+		                     (const uint8_t *)(texture+width*height),
+	                             width*4, false);
 		break;
 	case CURSOR_TYPE_MASKED_COLOR:
 		for (int i = 0; i < width * height; ++i) {
@@ -196,16 +212,18 @@ static void lg_fetch_cursor(struct lg_data *data, struct KVMFRCursor *header)
 			             (src[i] & 0xFF000000 ? 0x0 : 0xFF000000);
 		}
 		dest = data->cursor_image;
-		break;
+	default:
+		obs_enter_graphics();
+		gs_texture_destroy(data->cursor_mono);
+		data->cursor_mono = NULL;
 	}
-	obs_enter_graphics();
 	if (data->cursor_w != width ||
 	    data->cursor_h != height) {
 		if (data->cursor_texture) {
 			gs_texture_destroy(data->cursor_texture);
 		}
 		data->cursor_w = width;
-		data->cursor_w = height;
+		data->cursor_h = height;
 		data->cursor_texture = gs_texture_create(width, height,
 		                                         GS_BGRA, 1, NULL, 
 		                                         GS_DYNAMIC);
@@ -254,11 +272,11 @@ static void lg_video_tick_cursor(struct lg_data *data)
 	if (!(data->header->cursor.flags && KVMFR_CURSOR_FLAG_UPDATE)) return;
 	memcpy(&header,
 	       &data->header->cursor, sizeof(struct KVMFRCursor));
-	data->header->cursor.flags = 0;
 	if (header.flags & KVMFR_CURSOR_FLAG_SHAPE &&
 	    data->cursor_version != header.version) {
 		lg_fetch_cursor(data, &header);
 	}
+	data->header->cursor.flags = 0;
 	data->cursor_visible = header.flags & KVMFR_CURSOR_FLAG_VISIBLE;
 }
 static void lg_video_tick(void *vptr, float seconds)
@@ -292,6 +310,10 @@ static void lg_capture_stop(struct lg_data *data)
 	if (data->cursor_texture) {
 		gs_texture_destroy(data->cursor_texture);
 		data->cursor_texture = NULL;
+	}
+	if (data->cursor_mono) {
+		gs_texture_destroy(data->cursor_mono);
+		data->cursor_mono = NULL;
 	}
 	data->cursor_visible = false;
 
@@ -451,19 +473,16 @@ static void lg_video_render_cursor(struct lg_data *data, gs_effect_t *effect)
 	gs_effect_set_texture(image, data->cursor_texture);
 
 	gs_blend_state_push();
-	if (data->cursor_mono) {
-		gs_blend_function_separate(GS_BLEND_INVDSTCOLOR,
-		                           GS_BLEND_INVDSTCOLOR,
-		                           GS_BLEND_SRCALPHA,
-		                           GS_BLEND_INVSRCALPHA);
-	} else {
-		gs_blend_function(GS_BLEND_SRCALPHA, GS_BLEND_INVSRCALPHA);
-	}
+	gs_blend_function(GS_BLEND_SRCALPHA, GS_BLEND_INVSRCALPHA);
 	gs_enable_color(true, true, true, false);
 
 	gs_matrix_push();
 	gs_matrix_translate3f(data->cursor_x, data->cursor_y, 0.0f);
 	gs_draw_sprite(data->cursor_texture, 0, 0, 0);
+	if (data->cursor_mono) {
+		gs_effect_set_texture(image, data->cursor_mono);
+		gs_draw_sprite(data->cursor_mono, 0, 0, 0);
+	}
 	gs_matrix_pop();
 
 	gs_enable_color(true, true, true, true);
