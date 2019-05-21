@@ -56,7 +56,6 @@ struct lg_data {
 	gs_texture_t     *cursor_texture;
 	uint8_t          *cursor_image;
 	bool             cursor_visible;
-	gs_texture_t     *cursor_mono;
 	int_fast32_t     cursor_x;
 	int_fast32_t     cursor_y;
 	int_fast32_t     cursor_w;
@@ -159,26 +158,18 @@ static void lg_fetch_cursor(struct lg_data *data, struct KVMFRCursor *header)
 	uint8_t mask;
 	int width = header->width;
 	int height = header->height;
-	
-	if (header->type == CURSOR_TYPE_MONOCHROME) {
-		if (data->cursor_w != width ||
-		    data->cursor_h != height/2) {
-			if (data->cursor_image) bfree(data->cursor_image);
-			data->cursor_image = bmalloc(width * height * 4);
-		}
-	} else {
-		if (data->cursor_w != width ||
-		    data->cursor_h != height) {
-			if (data->cursor_image) bfree(data->cursor_image);
-			data->cursor_image = bmalloc(width * height * 4);
-		}
+
+	if (header->type == CURSOR_TYPE_MONOCHROME) height = height / 2;
+	if (data->cursor_w != width ||
+	    data->cursor_h != height) {
+		if (data->cursor_image) bfree(data->cursor_image);
+		data->cursor_image = bmalloc(width * height * 4);
 	}
+
 	uint32_t *texture = (uint32_t *)data->cursor_image;
-	
-	
+
 	switch (header->type) {
 	case CURSOR_TYPE_MONOCHROME:
-		height = height / 2;
 		for (int i = 0; i < width*height; ++i) {
 			mask = 0x80 >> (i & 7);
 			if (!(dest[i/8] & mask)) {
@@ -190,21 +181,10 @@ static void lg_fetch_cursor(struct lg_data *data, struct KVMFRCursor *header)
 		for (int i = width*height; i < 2*width*height; ++i) {
 			mask = 0x80 >> (i & 7);
 			if (dest[(i)/8] & mask) {
-				texture[i] = 0xFFFFFFFF;
-			} else {
-				texture[i] = 0x00000000;
+				texture[i-width*height] |= 0xFFFFFFFF;
 			}
 		}
 		dest = data->cursor_image;
-		obs_enter_graphics();
-		if (!data->cursor_mono) {
-			data->cursor_mono = gs_texture_create(width, height,
-		                                              GS_BGRA, 1, NULL, 
-		                                              GS_DYNAMIC);
-		}
-		gs_texture_set_image(data->cursor_mono,
-		                     (const uint8_t *)(texture+width*height),
-	                             width*4, false);
 		break;
 	case CURSOR_TYPE_MASKED_COLOR:
 		for (int i = 0; i < width * height; ++i) {
@@ -212,11 +192,8 @@ static void lg_fetch_cursor(struct lg_data *data, struct KVMFRCursor *header)
 			             (src[i] & 0xFF000000 ? 0x0 : 0xFF000000);
 		}
 		dest = data->cursor_image;
-	default:
-		obs_enter_graphics();
-		gs_texture_destroy(data->cursor_mono);
-		data->cursor_mono = NULL;
 	}
+	obs_enter_graphics();
 	if (data->cursor_w != width ||
 	    data->cursor_h != height) {
 		if (data->cursor_texture) {
@@ -231,7 +208,7 @@ static void lg_fetch_cursor(struct lg_data *data, struct KVMFRCursor *header)
 	gs_texture_set_image(data->cursor_texture, dest,
 	                     width*4, false);
 	obs_leave_graphics();
-	
+
 }
 
 /**
@@ -311,10 +288,6 @@ static void lg_capture_stop(struct lg_data *data)
 		gs_texture_destroy(data->cursor_texture);
 		data->cursor_texture = NULL;
 	}
-	if (data->cursor_mono) {
-		gs_texture_destroy(data->cursor_mono);
-		data->cursor_mono = NULL;
-	}
 	data->cursor_visible = false;
 
 	obs_leave_graphics();
@@ -369,7 +342,7 @@ static void lg_capture_start(struct lg_data *data)
 	obs_enter_graphics();
 	if (data->show_cursor) {
 		data->cursor_w = 1;
-		data->cursor_w = 1;
+		data->cursor_h = 1;
 		data->cursor_texture = gs_texture_create(1, 1,
 		                                         GS_BGRA, 1, NULL,
 		                                         GS_DYNAMIC);
@@ -469,9 +442,6 @@ static void *lg_create(obs_data_t *settings, obs_source_t *source)
  */
 static void lg_video_render_cursor(struct lg_data *data, gs_effect_t *effect)
 {
-	gs_eparam_t *image = gs_effect_get_param_by_name(effect, "image");
-	gs_effect_set_texture(image, data->cursor_texture);
-
 	gs_blend_state_push();
 	gs_blend_function(GS_BLEND_SRCALPHA, GS_BLEND_INVSRCALPHA);
 	gs_enable_color(true, true, true, false);
@@ -479,10 +449,6 @@ static void lg_video_render_cursor(struct lg_data *data, gs_effect_t *effect)
 	gs_matrix_push();
 	gs_matrix_translate3f(data->cursor_x, data->cursor_y, 0.0f);
 	gs_draw_sprite(data->cursor_texture, 0, 0, 0);
-	if (data->cursor_mono) {
-		gs_effect_set_texture(image, data->cursor_mono);
-		gs_draw_sprite(data->cursor_mono, 0, 0, 0);
-	}
 	gs_matrix_pop();
 
 	gs_enable_color(true, true, true, true);
@@ -506,6 +472,9 @@ static void lg_video_render(void *vptr, gs_effect_t *effect)
 
 	if (data->cursor_visible) {
 		effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+		gs_eparam_t *image = gs_effect_get_param_by_name(effect, 
+		                                                 "image");
+		gs_effect_set_texture(image, data->cursor_texture);
 		while (gs_effect_loop(effect, "Draw")) {
 			lg_video_render_cursor(data, effect);
 		}
