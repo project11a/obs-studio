@@ -67,14 +67,13 @@ OBSProjector::OBSProjector(QWidget *widget, obs_source_t *source_, int monitor,
 		obs_display_add_draw_callback(GetDisplay(),
 				isMultiview ? OBSRenderMultiview : OBSRender,
 				this);
-		obs_display_set_background_color(GetDisplay(), 0x000000);
 	};
 
 	connect(this, &OBSQTDisplay::DisplayCreated, addDrawCallback);
 
 	bool hideCursor = config_get_bool(GetGlobalConfig(),
 			"BasicWindow", "HideProjectorCursor");
-	if (hideCursor && !isWindow) {
+	if (hideCursor && !isWindow && type != ProjectorType::Multiview) {
 		QPixmap empty(16, 16);
 		empty.fill(Qt::transparent);
 		setCursor(QCursor(empty));
@@ -225,28 +224,6 @@ static OBSSource CreateLabel(const char *name, size_t h)
 	obs_data_release(settings);
 
 	return txtSource;
-}
-
-static inline void renderVB(gs_effect_t *effect, gs_vertbuffer_t *vb,
-		int cx, int cy)
-{
-	if (!vb)
-		return;
-
-	matrix4 transform;
-	matrix4_identity(&transform);
-	transform.x.x = cx;
-	transform.y.y = cy;
-
-	gs_load_vertexbuffer(vb);
-
-	gs_matrix_push();
-	gs_matrix_mul(&transform);
-
-	while (gs_effect_loop(effect, "Solid"))
-		gs_draw(GS_LINESTRIP, 0, 0);
-
-	gs_matrix_pop();
 }
 
 static inline uint32_t labelOffset(obs_source_t *label, uint32_t cx)

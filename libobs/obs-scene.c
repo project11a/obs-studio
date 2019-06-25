@@ -395,6 +395,8 @@ static void update_item_transform(struct obs_scene_item *item, bool update_tex)
 		scale.y = (float)height * item->scale.y;
 	}
 
+	item->box_scale = scale;
+
 	add_alignment(&base_origin, item->align, (int)scale.x, (int)scale.y);
 
 	matrix4_identity(&item->box_transform);
@@ -462,6 +464,8 @@ static inline bool item_texture_enabled(const struct obs_scene_item *item)
 
 static void render_item_texture(struct obs_scene_item *item)
 {
+	GS_DEBUG_MARKER_BEGIN(GS_DEBUG_COLOR_ITEM_TEXTURE, "render_item_texture");
+
 	gs_texture_t *tex = gs_texrender_get_texture(item->item_render);
 	gs_effect_t *effect = obs->video.default_effect;
 	enum obs_scale_type type = item->scale_filter;
@@ -503,18 +507,29 @@ static void render_item_texture(struct obs_scene_item *item)
 		}
 	}
 
+	gs_blend_state_push();
+	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+
 	while (gs_effect_loop(effect, "Draw"))
 		obs_source_draw(tex, 0, 0, 0, 0, 0);
+
+	gs_blend_state_pop();
+
+	GS_DEBUG_MARKER_END();
 }
 
 static inline void render_item(struct obs_scene_item *item)
 {
+	GS_DEBUG_MARKER_BEGIN_FORMAT(GS_DEBUG_COLOR_ITEM, "Item: %s",
+			obs_source_get_name(item->source));
+
 	if (item->item_render) {
 		uint32_t width  = obs_source_get_width(item->source);
 		uint32_t height = obs_source_get_height(item->source);
 
-		if (!width || !height)
-			return;
+		if (!width || !height) {
+			goto cleanup;
+		}
 
 		uint32_t cx = calc_cx(item, width);
 		uint32_t cy = calc_cy(item, height);
@@ -535,10 +550,8 @@ static inline void render_item(struct obs_scene_item *item)
 					-(float)item->crop.top,
 					0.0f);
 
-			gs_blend_state_push();
-			gs_blend_function(GS_BLEND_ONE, GS_BLEND_ZERO);
 			obs_source_video_render(item->source);
-			gs_blend_state_pop();
+
 			gs_texrender_end(item->item_render);
 		}
 	}
@@ -551,6 +564,9 @@ static inline void render_item(struct obs_scene_item *item)
 		obs_source_video_render(item->source);
 	}
 	gs_matrix_pop();
+
+cleanup:
+	GS_DEBUG_MARKER_END();
 }
 
 static void scene_video_tick(void *data, float seconds)
@@ -1249,6 +1265,7 @@ static inline void duplicate_item_data(struct obs_scene_item *dst,
 	dst->output_scale = src->output_scale;
 	dst->scale_filter = src->scale_filter;
 	dst->box_transform = src->box_transform;
+	dst->box_scale = src->box_scale;
 	dst->draw_transform = src->draw_transform;
 	dst->bounds_type = src->bounds_type;
 	dst->bounds_align = src->bounds_align;
@@ -2034,6 +2051,13 @@ void obs_sceneitem_get_box_transform(const obs_sceneitem_t *item,
 {
 	if (item)
 		matrix4_copy(transform, &item->box_transform);
+}
+
+void obs_sceneitem_get_box_scale(const obs_sceneitem_t *item,
+		struct vec2 *scale)
+{
+	if (item)
+		*scale = item->box_scale;
 }
 
 bool obs_sceneitem_visible(const obs_sceneitem_t *item)

@@ -67,6 +67,11 @@ struct OBSStudioAPI : obs_frontend_callbacks {
 		return (void*)main->winId();
 	}
 
+	void *obs_frontend_get_system_tray(void) override
+	{
+		return (void*)main->trayIcon.data();
+	}
+
 	void obs_frontend_get_scenes(
 			struct obs_frontend_source_list *sources) override
 	{
@@ -132,6 +137,17 @@ struct OBSStudioAPI : obs_frontend_callbacks {
 	{
 		QMetaObject::invokeMethod(main, "SetTransition",
 				Q_ARG(OBSSource, OBSSource(transition)));
+	}
+
+	int obs_frontend_get_transition_duration(void) override
+	{
+		return main->ui->transitionDuration->value();
+	}
+
+	void obs_frontend_set_transition_duration(int duration) override
+	{
+		QMetaObject::invokeMethod(main->ui->transitionDuration, "setValue",
+			Q_ARG(int, duration));
 	}
 
 	void obs_frontend_get_scene_collections(
@@ -294,6 +310,11 @@ struct OBSStudioAPI : obs_frontend_callbacks {
 		QObject::connect(action, &QAction::triggered, func);
 	}
 
+	void *obs_frontend_add_dock(void *dock) override
+	{
+		return (void*)main->AddDockWidget((QDockWidget *)dock);
+	}
+
 	void obs_frontend_add_event_callback(obs_frontend_event_cb callback,
 			void *private_data) override
 	{
@@ -432,6 +453,11 @@ struct OBSStudioAPI : obs_frontend_callbacks {
 	void obs_frontend_set_preview_program_mode(bool enable) override
 	{
 		main->SetPreviewProgramMode(enable);
+	}
+
+	void obs_frontend_preview_program_trigger_transition(void) override
+	{
+		QMetaObject::invokeMethod(main, "TransitionClicked");
 	}
 
 	bool obs_frontend_preview_enabled(void) override

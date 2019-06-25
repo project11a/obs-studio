@@ -21,6 +21,7 @@
 #include <util/dstr.h>
 #include <util/util.hpp>
 #include <graphics/matrix3.h>
+#include <d3d9.h>
 #include "d3d11-subsystem.hpp"
 
 struct UnsupportedHWError : HRError {
@@ -663,7 +664,7 @@ static inline void EnumD3DAdapters(
 	ComPtr<IDXGIFactory1> factory;
 	ComPtr<IDXGIAdapter1> adapter;
 	HRESULT hr;
-	UINT i = 0;
+	UINT i;
 
 	IID factoryIID = (GetWinVer() >= 0x602) ? dxgiFactory2 :
 		__uuidof(IDXGIFactory1);
@@ -672,7 +673,7 @@ static inline void EnumD3DAdapters(
 	if (FAILED(hr))
 		throw HRError("Failed to create DXGIFactory", hr);
 
-	while (factory->EnumAdapters1(i++, adapter.Assign()) == S_OK) {
+	for (i = 0; factory->EnumAdapters1(i, adapter.Assign()) == S_OK; ++i) {
 		DXGI_ADAPTER_DESC desc;
 		char name[512] = "";
 
@@ -686,7 +687,7 @@ static inline void EnumD3DAdapters(
 
 		os_wcs_to_utf8(desc.Description, 0, name, sizeof(name));
 
-		if (!callback(param, name, i - 1))
+		if (!callback(param, name, i))
 			break;
 	}
 }
@@ -708,10 +709,10 @@ bool device_enum_adapters(
 
 static inline void LogAdapterMonitors(IDXGIAdapter1 *adapter)
 {
-	UINT i = 0;
+	UINT i;
 	ComPtr<IDXGIOutput> output;
 
-	while (adapter->EnumOutputs(i++, &output) == S_OK) {
+	for (i = 0; adapter->EnumOutputs(i, &output) == S_OK; ++i) {
 		DXGI_OUTPUT_DESC desc;
 		if (FAILED(output->GetDesc(&desc)))
 			continue;
@@ -733,7 +734,7 @@ static inline void LogD3DAdapters()
 	ComPtr<IDXGIFactory1> factory;
 	ComPtr<IDXGIAdapter1> adapter;
 	HRESULT hr;
-	UINT i = 0;
+	UINT i;
 
 	blog(LOG_INFO, "Available Video Adapters: ");
 
@@ -744,7 +745,7 @@ static inline void LogD3DAdapters()
 	if (FAILED(hr))
 		throw HRError("Failed to create DXGIFactory", hr);
 
-	while (factory->EnumAdapters1(i++, adapter.Assign()) == S_OK) {
+	for (i = 0; factory->EnumAdapters1(i, adapter.Assign()) == S_OK; ++i) {
 		DXGI_ADAPTER_DESC desc;
 		char name[512] = "";
 
@@ -2215,6 +2216,24 @@ extern "C" EXPORT bool device_shared_texture_available(void)
 extern "C" EXPORT bool device_nv12_available(gs_device_t *device)
 {
 	return device->nv12Supported;
+}
+
+extern "C" EXPORT void device_debug_marker_begin(gs_device_t *,
+		const char *markername, const float color[4])
+{
+	D3DCOLOR bgra = D3DCOLOR_ARGB((DWORD)(255.0f * color[3]),
+			(DWORD)(255.0f * color[0]), (DWORD)(255.0f * color[1]),
+			(DWORD)(255.0f * color[2]));
+
+	wchar_t wide[64];
+	os_utf8_to_wcs(markername, 0, wide, _countof(wide));
+
+	D3DPERF_BeginEvent(bgra, wide);
+}
+
+extern "C" EXPORT void device_debug_marker_end(gs_device_t *)
+{
+	D3DPERF_EndEvent();
 }
 
 extern "C" EXPORT gs_texture_t *device_texture_create_gdi(gs_device_t *device,

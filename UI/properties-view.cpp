@@ -19,7 +19,11 @@
 #include <QMenu>
 #include <QStackedWidget>
 #include <QDir>
+#include <QGroupBox>
 #include "double-slider.hpp"
+#include "slider-ignorewheel.hpp"
+#include "spinbox-ignorewheel.hpp"
+#include "combobox-ignorewheel.hpp"
 #include "qt-wrappers.hpp"
 #include "properties-view.hpp"
 #include "properties-view.moc.hpp"
@@ -148,6 +152,8 @@ void OBSPropertiesView::RefreshProperties()
 		QLabel *noPropertiesLabel = new QLabel(NO_PROPERTIES_STRING);
 		layout->addWidget(noPropertiesLabel);
 	}
+
+	emit PropertiesRefreshed();
 }
 
 void OBSPropertiesView::SetScrollPos(int h, int v)
@@ -321,7 +327,7 @@ void OBSPropertiesView::AddInt(obs_property_t *prop, QFormLayout *layout,
 
 	const char *name = obs_property_name(prop);
 	int        val   = (int)obs_data_get_int(settings, name);
-	QSpinBox   *spin = new QSpinBox();
+	QSpinBox   *spin = new SpinBoxIgnoreScroll();
 
 	if (!obs_property_enabled(prop))
 		spin->setEnabled(false);
@@ -329,18 +335,20 @@ void OBSPropertiesView::AddInt(obs_property_t *prop, QFormLayout *layout,
 	int minVal = obs_property_int_min(prop);
 	int maxVal = obs_property_int_max(prop);
 	int stepVal = obs_property_int_step(prop);
+	const char *suffix = obs_property_int_suffix(prop);
 
 	spin->setMinimum(minVal);
 	spin->setMaximum(maxVal);
 	spin->setSingleStep(stepVal);
 	spin->setValue(val);
 	spin->setToolTip(QT_UTF8(obs_property_long_description(prop)));
+	spin->setSuffix(QT_UTF8(suffix));
 
 	WidgetInfo *info = new WidgetInfo(this, prop, spin);
 	children.emplace_back(info);
 
 	if (type == OBS_NUMBER_SLIDER) {
-		QSlider *slider = new QSlider();
+		QSlider *slider = new SliderIgnoreScroll();
 		slider->setMinimum(minVal);
 		slider->setMaximum(maxVal);
 		slider->setPageStep(stepVal);
@@ -378,12 +386,14 @@ void OBSPropertiesView::AddFloat(obs_property_t *prop, QFormLayout *layout,
 	double minVal = obs_property_float_min(prop);
 	double maxVal = obs_property_float_max(prop);
 	double stepVal = obs_property_float_step(prop);
+	const char *suffix = obs_property_float_suffix(prop);
 
 	spin->setMinimum(minVal);
 	spin->setMaximum(maxVal);
 	spin->setSingleStep(stepVal);
 	spin->setValue(val);
 	spin->setToolTip(QT_UTF8(obs_property_long_description(prop)));
+	spin->setSuffix(QT_UTF8(suffix));
 
 	WidgetInfo *info = new WidgetInfo(this, prop, spin);
 	children.emplace_back(info);
@@ -481,7 +491,7 @@ static string from_obs_data_autoselect(obs_data_t *data, const char *name,
 QWidget *OBSPropertiesView::AddList(obs_property_t *prop, bool &warning)
 {
 	const char       *name  = obs_property_name(prop);
-	QComboBox        *combo = new QComboBox();
+	QComboBox        *combo = new ComboBoxIgnoreScroll();
 	obs_combo_type   type   = obs_property_list_type(prop);
 	obs_combo_format format = obs_property_list_format(prop);
 	size_t           count  = obs_property_list_item_count(prop);
@@ -913,7 +923,7 @@ static QWidget *CreateSimpleFPSValues(OBSFrameRatePropertyWidget *fpsProps,
 	auto items = vector<common_frame_rate>{};
 	items.reserve(sizeof(common_fps)/sizeof(common_frame_rate));
 
-	auto combo = fpsProps->simpleFPS = new QComboBox{};
+	auto combo = fpsProps->simpleFPS = new ComboBoxIgnoreScroll{};
 
 	combo->addItem("", QVariant::fromValue(make_fps(0, 0)));
 	for (const auto &fps : common_fps) {
@@ -993,7 +1003,7 @@ static QWidget *CreateRationalFPS(OBSFrameRatePropertyWidget *fpsProps,
 	auto str = QTStr("Basic.PropertiesView.FPS.ValidFPSRanges");
 	auto rlabel = new QLabel{str};
 
-	auto combo = fpsProps->fpsRange = new QComboBox{};
+	auto combo = fpsProps->fpsRange = new ComboBoxIgnoreScroll{};
 	auto convert_fps = media_frames_per_second_to_fps;
 	//auto convert_fi  = media_frames_per_second_to_frame_interval;
 
@@ -1014,8 +1024,8 @@ static QWidget *CreateRationalFPS(OBSFrameRatePropertyWidget *fpsProps,
 
 	layout->addRow(rlabel, combo);
 
-	auto num_edit = fpsProps->numEdit = new QSpinBox{};
-	auto den_edit = fpsProps->denEdit = new QSpinBox{};
+	auto num_edit = fpsProps->numEdit = new SpinBoxIgnoreScroll{};
+	auto den_edit = fpsProps->denEdit = new SpinBoxIgnoreScroll{};
 
 	num_edit->setRange(0, INT_MAX);
 	den_edit->setRange(0, INT_MAX);
@@ -1044,7 +1054,7 @@ static OBSFrameRatePropertyWidget *CreateFrameRateWidget(obs_property_t *prop,
 
 	swap(widget->fps_ranges, fps_ranges);
 
-	auto combo = widget->modeSelect = new QComboBox{};
+	auto combo = widget->modeSelect = new ComboBoxIgnoreScroll{};
 	combo->addItem(QTStr("Basic.PropertiesView.FPS.Simple"),
 			QVariant::fromValue(frame_rate_tag::simple()));
 	combo->addItem(QTStr("Basic.PropertiesView.FPS.Rational"),
@@ -1329,6 +1339,44 @@ void OBSPropertiesView::AddFrameRate(obs_property_t *prop, bool &warning,
 	});
 }
 
+void OBSPropertiesView::AddGroup(obs_property_t *prop, QFormLayout *layout)
+{
+	const char *name = obs_property_name(prop);
+	bool val = obs_data_get_bool(settings, name);
+	const char *desc = obs_property_description(prop);
+	enum obs_group_type type = obs_property_group_type(prop);
+
+	// Create GroupBox
+	QGroupBox *groupBox = new QGroupBox(QT_UTF8(desc));
+	groupBox->setCheckable(type == OBS_GROUP_CHECKABLE);
+	groupBox->setChecked(groupBox->isCheckable() ? val : true);
+	groupBox->setAccessibleName("group");
+	groupBox->setEnabled(obs_property_enabled(prop));
+
+	// Create Layout and build content
+	QFormLayout *subLayout = new QFormLayout();
+	subLayout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+	groupBox->setLayout(subLayout);
+
+	obs_properties_t *content = obs_property_group_content(prop);
+	obs_property_t *el = obs_properties_first(content);
+	while (el != nullptr) {
+		AddProperty(el, subLayout);
+		obs_property_next(&el);
+	}
+
+	// Insert into UI
+	layout->setWidget(layout->rowCount(),
+			QFormLayout::ItemRole::SpanningRole, groupBox);
+
+	// Register Group Widget
+	WidgetInfo *info = new WidgetInfo(this, prop, groupBox);
+	children.emplace_back(info);
+
+	// Signals
+	connect(groupBox, SIGNAL(toggled()), info, SLOT(ControlChanged()));
+}
+
 void OBSPropertiesView::AddProperty(obs_property_t *property,
 		QFormLayout *layout)
 {
@@ -1378,6 +1426,8 @@ void OBSPropertiesView::AddProperty(obs_property_t *property,
 	case OBS_PROPERTY_FRAME_RATE:
 		AddFrameRate(property, warning, layout, label);
 		break;
+	case OBS_PROPERTY_GROUP:
+		AddGroup(property, layout);
 	}
 
 	if (widget && !obs_property_enabled(property))
@@ -1385,7 +1435,8 @@ void OBSPropertiesView::AddProperty(obs_property_t *property,
 
 	if (!label &&
 	    type != OBS_PROPERTY_BOOL &&
-	    type != OBS_PROPERTY_BUTTON)
+	    type != OBS_PROPERTY_BUTTON &&
+	    type != OBS_PROPERTY_GROUP)
 		label = new QLabel(QT_UTF8(obs_property_description(property)));
 
 	if (warning && label) //TODO: select color based on background color
@@ -1626,8 +1677,7 @@ bool WidgetInfo::ColorChanged(const char *setting)
 	long long  val   = obs_data_get_int(view->settings, setting);
 	QColor     color = color_from_int(val);
 
-	QColorDialog::ColorDialogOptions options =
-		QColorDialog::ShowAlphaChannel;
+	QColorDialog::ColorDialogOptions options = 0;
 
 	/* The native dialog on OSX has all kinds of problems, like closing
 	 * other open QDialogs on exit, and
@@ -1704,6 +1754,13 @@ bool WidgetInfo::FontChanged(const char *setting)
 	return true;
 }
 
+void WidgetInfo::GroupChanged(const char *setting)
+{
+	QGroupBox *groupbox = static_cast<QGroupBox*>(widget);
+	obs_data_set_bool(view->settings, setting,
+		groupbox->isCheckable() ? groupbox->isChecked() : true);
+}
+
 void WidgetInfo::EditableListChanged()
 {
 	const char *setting = obs_property_name(property);
@@ -1773,6 +1830,7 @@ void WidgetInfo::ControlChanged()
 		if (!FrameRateChanged(widget, setting, view->settings))
 			return;
 		break;
+	case OBS_PROPERTY_GROUP:  GroupChanged(setting); return;
 	}
 
 	if (view->callback && !view->deferUpdate)

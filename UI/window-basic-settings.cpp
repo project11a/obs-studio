@@ -48,6 +48,7 @@
 #include "window-projector.hpp"
 
 #include <util/platform.h>
+#include "ui-config.h"
 
 using namespace std;
 
@@ -295,10 +296,6 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 
 	ui->listWidget->setAttribute(Qt::WA_MacShowFocusRect, false);
 
-	auto policy = ui->audioSourceScrollArea->sizePolicy();
-	policy.setVerticalStretch(true);
-	ui->audioSourceScrollArea->setSizePolicy(policy);
-
 	HookWidget(ui->language,             COMBO_CHANGED,  GENERAL_CHANGED);
 	HookWidget(ui->theme, 		     COMBO_CHANGED,  GENERAL_CHANGED);
 	HookWidget(ui->enableAutoUpdates,    CHECK_CHANGED,  GENERAL_CHANGED);
@@ -465,14 +462,20 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->disableFocusHotkeys,  CHECK_CHANGED,  ADV_CHANGED);
 	HookWidget(ui->autoRemux,            CHECK_CHANGED,  ADV_CHANGED);
 
+	ui->simpleOutputVBitrate->setSingleStep(50);
+	ui->simpleOutputVBitrate->setSuffix(" Kbps");
+	ui->advOutFFVBitrate->setSingleStep(50);
+	ui->advOutFFVBitrate->setSuffix(" Kbps");
+	ui->advOutFFABitrate->setSuffix(" Kbps");
+
 #if !defined(_WIN32) && !defined(__APPLE__)
 	delete ui->enableAutoUpdates;
 	ui->enableAutoUpdates = nullptr;
 #endif
 
 #if !defined(_WIN32) && !defined(__APPLE__) && !HAVE_PULSEAUDIO
-	delete ui->advAudioGroupBox;
-	ui->advAudioGroupBox = nullptr;
+	delete ui->audioAdvGroupBox;
+	ui->audioAdvGroupBox = nullptr;
 #endif
 
 #ifdef _WIN32
@@ -724,6 +727,10 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	connect(ui->advOutRecFormat, SIGNAL(currentIndexChanged(int)),
 			this, SLOT(AdvOutRecCheckWarnings()));
 	AdvOutRecCheckWarnings();
+
+	ui->buttonBox->button(QDialogButtonBox::Apply)->setIcon(QIcon());
+	ui->buttonBox->button(QDialogButtonBox::Ok)->setIcon(QIcon());
+	ui->buttonBox->button(QDialogButtonBox::Cancel)->setIcon(QIcon());
 
 	SimpleRecordingQualityChanged();
 
@@ -1003,17 +1010,31 @@ void OBSBasicSettings::LoadThemeList()
 		}
 	}
 
+	QString defaultTheme;
+	defaultTheme += DEFAULT_THEME;
+	defaultTheme += " ";
+	defaultTheme += QTStr("Default");
+
 	/* Check shipped themes. */
 	QDirIterator uIt(QString(themeDir.c_str()), QStringList() << "*.qss",
 			QDir::Files);
 	while (uIt.hasNext()) {
 		uIt.next();
 		QString name = uIt.fileName().section(".",0,0);
-		if (!uniqueSet.contains(name))
+
+		if (name == DEFAULT_THEME)
+			name = defaultTheme;
+
+		if (!uniqueSet.contains(name) && name != "Default")
 			ui->theme->addItem(name);
 	}
 
-	int idx = ui->theme->findText(App()->GetTheme());
+	std::string themeName = App()->GetTheme();
+
+	if (themeName == DEFAULT_THEME)
+		themeName = QT_TO_UTF8(defaultTheme);
+
+	int idx = ui->theme->findText(themeName.c_str());
 	if (idx != -1)
 		ui->theme->setCurrentIndex(idx);
 }
@@ -2006,17 +2027,21 @@ void OBSBasicSettings::LoadAudioDevices()
 
 void OBSBasicSettings::LoadAudioSources()
 {
+	if (ui->audioSourceLayout->rowCount() > 0) {
+		QLayoutItem *forDeletion = ui->audioSourceLayout->takeAt(0);
+		delete forDeletion->widget();
+		delete forDeletion;
+	}
 	auto layout = new QFormLayout();
 	layout->setVerticalSpacing(15);
 	layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
-	ui->audioSourceScrollArea->takeWidget()->deleteLater();
 	audioSourceSignals.clear();
 	audioSources.clear();
 
 	auto widget = new QWidget();
 	widget->setLayout(layout);
-	ui->audioSourceScrollArea->setWidget(widget);
+	ui->audioSourceLayout->addRow(widget);
 
 	const char *enablePtm = Str("Basic.Settings.Audio.EnablePushToMute");
 	const char *ptmDelay  = Str("Basic.Settings.Audio.PushToMuteDelay");
@@ -2095,6 +2120,8 @@ void OBSBasicSettings::LoadAudioSources()
 				ptmCB, pttSB, pttCB, pttSB);
 
 		auto label = new OBSSourceLabel(source);
+		label->setMinimumSize(QSize(170, 0));
+		label->setAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
 		connect(label, &OBSSourceLabel::Removed,
 				[=]()
 				{
@@ -2120,9 +2147,9 @@ void OBSBasicSettings::LoadAudioSources()
 
 
 	if (layout->rowCount() == 0)
-		ui->audioSourceScrollArea->hide();
+		ui->audioHotkeysGroupBox->hide();
 	else
-		ui->audioSourceScrollArea->show();
+		ui->audioHotkeysGroupBox->show();
 }
 
 void OBSBasicSettings::LoadAudioSettings()
@@ -2302,12 +2329,22 @@ void OBSBasicSettings::LoadAdvancedSettings()
 	loading = false;
 }
 
+#define TRUNCATE_TEXT_LENGTH 80
+
 template <typename Func>
 static inline void LayoutHotkey(obs_hotkey_id id, obs_hotkey_t *key, Func &&fun,
 		const map<obs_hotkey_id, vector<obs_key_combination_t>> &keys)
 {
 	auto *label = new OBSHotkeyLabel;
-	label->setText(obs_hotkey_get_description(key));
+	QString text = QT_UTF8(obs_hotkey_get_description(key));
+
+	if (text.length() > TRUNCATE_TEXT_LENGTH) {
+		label->setProperty("fullName", text);
+		text = text.left(TRUNCATE_TEXT_LENGTH);
+		text += "...'";
+	}
+
+	label->setText(text);
 
 	OBSHotkeyWidget *hw = nullptr;
 
@@ -2333,7 +2370,19 @@ static QLabel *makeLabel(T &t, Func &&getName)
 template <typename Func>
 static QLabel *makeLabel(const OBSSource &source, Func &&)
 {
-	return new OBSSourceLabel(source);
+	OBSSourceLabel *label = new OBSSourceLabel(source);
+	label->setStyleSheet("font-weight: bold;");
+	QString name = QT_UTF8(obs_source_get_name(source));
+
+	if (name.length() > TRUNCATE_TEXT_LENGTH) {
+		label->setToolTip(name);
+		name = name.left(TRUNCATE_TEXT_LENGTH);
+		name += "...";
+	}
+
+	label->setText(name);
+
+	return label;
 }
 
 template <typename Func, typename T>
@@ -2345,13 +2394,8 @@ static inline void AddHotkeys(QFormLayout &layout,
 	if (hotkeys.empty())
 		return;
 
-	auto line = new QFrame();
-	line->setFrameShape(QFrame::HLine);
-	line->setFrameShadow(QFrame::Sunken);
-
 	layout.setItem(layout.rowCount(), QFormLayout::SpanningRole,
 			new QSpacerItem(0, 10));
-	layout.addRow(line);
 
 	using tuple_type =
 		std::tuple<T, QPointer<QLabel>, QPointer<QWidget>>;
@@ -2612,7 +2656,12 @@ void OBSBasicSettings::LoadHotkeySettings(obs_hotkey_id ignoreKey)
 		auto Update = [&](OBSHotkeyLabel *label, const QString &name,
 				OBSHotkeyLabel *other, const QString &otherName)
 		{
-			label->setToolTip(tt.arg(otherName));
+			QString string = other->property("fullName").value<QString>();
+
+			if (string.isEmpty() || string.isNull())
+				string = otherName;
+
+			label->setToolTip(tt.arg(string));
 			label->setText(name + " *");
 			label->pairPartner = other;
 		};
@@ -2657,13 +2706,19 @@ void OBSBasicSettings::SaveGeneralSettings()
 
 	int themeIndex = ui->theme->currentIndex();
 	QString themeData = ui->theme->itemText(themeIndex);
-	string theme = themeData.toStdString();
+	QString defaultTheme;
+	defaultTheme += DEFAULT_THEME;
+	defaultTheme += " ";
+	defaultTheme += QTStr("Default");
+
+	if (themeData == defaultTheme)
+		themeData = DEFAULT_THEME;
 
 	if (WidgetChanged(ui->theme)) {
 		config_set_string(GetGlobalConfig(), "General", "CurrentTheme",
-				  theme.c_str());
+				  QT_TO_UTF8(themeData));
 
-		App()->SetTheme(theme);
+		App()->SetTheme(themeData.toUtf8().constData());
 	}
 
 #if defined(_WIN32) || defined(__APPLE__)
@@ -3392,8 +3447,17 @@ void OBSBasicSettings::closeEvent(QCloseEvent *event)
 
 void OBSBasicSettings::on_theme_activated(int idx)
 {
-	string currT = ui->theme->itemText(idx).toStdString();
-	App()->SetTheme(currT);
+	QString currT = ui->theme->itemText(idx);
+
+	QString defaultTheme;
+	defaultTheme += DEFAULT_THEME;
+	defaultTheme += " ";
+	defaultTheme += QTStr("Default");
+
+	if (currT == defaultTheme)
+		currT = DEFAULT_THEME;
+
+	App()->SetTheme(currT.toUtf8().constData());
 }
 
 void OBSBasicSettings::on_listWidget_itemSelectionChanged()
@@ -4288,7 +4352,6 @@ void OBSBasicSettings::AdvReplayBufferChanged()
 		ui->advRBEstimate->setText(QTStr(ESTIMATE_UNKNOWN_STR));
 
 	ui->advReplayBufferGroupBox->setVisible(!lossless && replayBufferEnabled);
-	ui->line_4->setVisible(!lossless && replayBufferEnabled);
 	ui->advReplayBuf->setEnabled(!lossless);
 
 	UpdateAutomaticReplayBufferCheckboxes();

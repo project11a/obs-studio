@@ -7,7 +7,7 @@ else()
 	set(FIND_MODE QUIET)
 endif()
 
-if(BROWSER_AVAILABLE_INTERNAL AND WIN32)
+if(BROWSER_AVAILABLE_INTERNAL)
 	add_definitions(-DBROWSER_AVAILABLE)
 endif()
 
@@ -97,7 +97,7 @@ if(WIN32)
 		win-update/update-window.cpp
 		win-update/win-update.cpp
 		win-update/win-update-helpers.cpp
-		obs.rc)
+		${obs-studio_BINARY_DIR}/obs.rc)
 	set(obs_PLATFORM_HEADERS
 		win-update/update-window.hpp
 		win-update/win-update.hpp
@@ -232,16 +232,16 @@ set(obs_SOURCES
 	focus-list.cpp
 	menu-button.cpp
 	double-slider.cpp
+	slider-ignorewheel.cpp
+	combobox-ignorewheel.cpp
+	spinbox-ignorewheel.cpp
 	volume-control.cpp
 	adv-audio-control.cpp
 	item-widget-helpers.cpp
-	visibility-checkbox.cpp
-	locked-checkbox.cpp
 	horizontal-scroll-area.cpp
 	vertical-scroll-area.cpp
 	visibility-item-widget.cpp
 	slider-absoluteset-style.cpp
-	source-list-widget.cpp
 	qt-display.cpp
 	crash-report.cpp
 	hotkey-edit.cpp
@@ -283,6 +283,9 @@ set(obs_HEADERS
 	display-helpers.hpp
 	balance-slider.hpp
 	double-slider.hpp
+	slider-ignorewheel.hpp
+	combobox-ignorewheel.hpp
+	spinbox-ignorewheel.hpp
 	focus-list.hpp
 	menu-button.hpp
 	mute-checkbox.hpp
@@ -296,7 +299,6 @@ set(obs_HEADERS
 	vertical-scroll-area.hpp
 	visibility-item-widget.hpp
 	slider-absoluteset-style.hpp
-	source-list-widget.hpp
 	qt-display.hpp
 	crash-report.hpp
 	hotkey-edit.hpp
@@ -378,9 +380,7 @@ install_obs_data(obs data obs-studio)
 install_obs_data_file(obs ../AUTHORS obs-studio/authors)
 
 if (UNIX AND UNIX_STRUCTURE AND NOT APPLE)
-	install(FILES dist/obs.desktop DESTINATION ${CMAKE_INSTALL_FULL_DATAROOTDIR}/applications)
-	install(FILES forms/images/obs.png
-		DESTINATION ${CMAKE_INSTALL_FULL_DATAROOTDIR}/icons/hicolor/256x256/apps)
+	add_subdirectory(xdg-data)
 endif()
 
 add_subdirectory(frontend-plugins)

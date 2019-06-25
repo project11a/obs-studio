@@ -643,12 +643,10 @@ struct obs_source {
 	struct obs_source_frame         *cur_async_frame;
 	bool                            async_gpu_conversion;
 	enum video_format               async_format;
-	enum video_format               async_cache_format;
-	enum gs_color_format            async_texture_format;
-	float                           async_color_matrix[16];
 	bool                            async_full_range;
-	float                           async_color_range_min[3];
-	float                           async_color_range_max[3];
+	enum video_format               async_cache_format;
+	bool                            async_cache_full_range;
+	enum gs_color_format            async_texture_format;
 	int                             async_plane_offset[2];
 	bool                            async_flip;
 	bool                            async_active;
@@ -844,6 +842,7 @@ struct obs_weak_output {
 #define CAPTION_LINE_BYTES (4*CAPTION_LINE_CHARS)
 struct caption_text {
 	char text[CAPTION_LINE_BYTES+1];
+	double display_duration;
 	struct caption_text *next;
 };
 
@@ -1043,7 +1042,7 @@ extern void obs_encoder_remove_output(struct obs_encoder *encoder,
 extern bool start_gpu_encode(obs_encoder_t *encoder);
 extern void stop_gpu_encode(obs_encoder_t *encoder);
 
-extern void do_encode(struct obs_encoder *encoder, struct encoder_frame *frame);
+extern bool do_encode(struct obs_encoder *encoder, struct encoder_frame *frame);
 extern void send_off_encoder_packet(obs_encoder_t *encoder, bool success,
 		bool received, struct encoder_packet *pkt);
 

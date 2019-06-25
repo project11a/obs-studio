@@ -90,6 +90,33 @@ void OBSMessageBox::information(
 	mb.exec();
 }
 
+void OBSMessageBox::warning(
+	QWidget *parent,
+	const QString &title,
+	const QString &text,
+	bool enableRichText)
+{
+	QMessageBox mb(QMessageBox::Warning,
+		title, text, QMessageBox::Ok,
+		parent);
+	if (enableRichText)
+		mb.setTextFormat(Qt::RichText);
+	mb.setButtonText(QMessageBox::Ok, QTStr("OK"));
+	mb.exec();
+}
+
+void OBSMessageBox::critical(
+	QWidget *parent,
+	const QString &title,
+	const QString &text)
+{
+	QMessageBox mb(QMessageBox::Critical,
+		title, text, QMessageBox::Ok,
+		parent);
+	mb.setButtonText(QMessageBox::Ok, QTStr("OK"));
+	mb.exec();
+}
+
 void QTToGSWindow(WId windowId, gs_window &gswindow)
 {
 #ifdef _WIN32

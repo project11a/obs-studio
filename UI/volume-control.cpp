@@ -2,11 +2,11 @@
 #include "qt-wrappers.hpp"
 #include "obs-app.hpp"
 #include "mute-checkbox.hpp"
+#include "slider-ignorewheel.hpp"
 #include "slider-absoluteset-style.hpp"
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QPushButton>
-#include <QSlider>
 #include <QLabel>
 #include <QPainter>
 #include <QStyleFactory>
@@ -14,6 +14,7 @@
 using namespace std;
 
 #define CLAMP(x, min, max) ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
+#define FADER_PRECISION 4096.0
 
 QWeakPointer<VolumeMeterTimer> VolumeMeter::updateTimer;
 
@@ -47,7 +48,8 @@ void VolControl::OBSVolumeMuted(void *data, calldata_t *calldata)
 void VolControl::VolumeChanged()
 {
 	slider->blockSignals(true);
-	slider->setValue((int) (obs_fader_get_deflection(obs_fader) * 100.0f));
+	slider->setValue((int) (obs_fader_get_deflection(obs_fader) *
+			FADER_PRECISION));
 	slider->blockSignals(false);
 
 	updateText();
@@ -66,7 +68,7 @@ void VolControl::SetMuted(bool checked)
 
 void VolControl::SliderChanged(int vol)
 {
-	obs_fader_set_deflection(obs_fader, float(vol) * 0.01f);
+	obs_fader_set_deflection(obs_fader, float(vol) / FADER_PRECISION);
 	updateText();
 }
 
@@ -116,13 +118,14 @@ VolControl::VolControl(OBSSource source_, bool showConfig, bool vertical)
 		: source      (std::move(source_)),
 		levelTotal    (0.0f),
 		levelCount    (0.0f),
-		obs_fader     (obs_fader_create(OBS_FADER_CUBIC)),
+		obs_fader     (obs_fader_create(OBS_FADER_LOG)),
 		obs_volmeter  (obs_volmeter_create(OBS_FADER_LOG)),
 		vertical      (vertical)
 {
 	nameLabel = new QLabel();
 	volLabel  = new QLabel();
 	mute      = new MuteCheckBox();
+
 	QString sourceName = obs_source_get_name(source);
 	setObjectName(sourceName);
 
@@ -153,7 +156,7 @@ VolControl::VolControl(OBSSource source_, bool showConfig, bool vertical)
 		QHBoxLayout *meterLayout  = new QHBoxLayout;
 
 		volMeter  = new VolumeMeter(nullptr, obs_volmeter, true);
-		slider    = new QSlider(Qt::Vertical);
+		slider    = new SliderIgnoreScroll(Qt::Vertical);
 
 		nameLayout->setAlignment(Qt::AlignCenter);
 		meterLayout->setAlignment(Qt::AlignCenter);
@@ -188,6 +191,8 @@ VolControl::VolControl(OBSSource source_, bool showConfig, bool vertical)
 		mainLayout->addItem(meterLayout);
 		mainLayout->addItem(controlLayout);
 
+		volMeter->setFocusProxy(slider);
+
 		setMaximumWidth(110);
 	} else {
 		QHBoxLayout *volLayout  = new QHBoxLayout;
@@ -195,7 +200,7 @@ VolControl::VolControl(OBSSource source_, bool showConfig, bool vertical)
 		QHBoxLayout *botLayout  = new QHBoxLayout;
 
 		volMeter  = new VolumeMeter(nullptr, obs_volmeter, false);
-		slider    = new QSlider(Qt::Horizontal);
+		slider    = new SliderIgnoreScroll(Qt::Horizontal);
 
 		textLayout->setContentsMargins(0, 0, 0, 0);
 		textLayout->addWidget(nameLabel);
@@ -217,6 +222,8 @@ VolControl::VolControl(OBSSource source_, bool showConfig, bool vertical)
 		mainLayout->addItem(textLayout);
 		mainLayout->addWidget(volMeter);
 		mainLayout->addItem(botLayout);
+
+		volMeter->setFocusProxy(slider);
 	}
 
 	setLayout(mainLayout);
@@ -227,8 +234,9 @@ VolControl::VolControl(OBSSource source_, bool showConfig, bool vertical)
 	nameLabel->setText(sourceName);
 	nameLabel->setFont(font);
 	volLabel->setFont(font);
+
 	slider->setMinimum(0);
-	slider->setMaximum(100);
+	slider->setMaximum(int(FADER_PRECISION));
 
 	bool muted = obs_source_muted(source);
 	mute->setChecked(muted);
@@ -496,6 +504,16 @@ void VolumeMeter::setPeakMeterType(enum obs_peak_meter_type peakMeterType)
 		setWarningLevel(-20.0);
 		break;
 	}
+}
+
+void VolumeMeter::mousePressEvent(QMouseEvent *event)
+{
+	setFocus(Qt::MouseFocusReason);
+}
+
+void VolumeMeter::wheelEvent(QWheelEvent *event)
+{
+	QApplication::sendEvent(focusProxy(), event);
 }
 
 VolumeMeter::VolumeMeter(QWidget *parent, obs_volmeter_t *obs_volmeter,

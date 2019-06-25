@@ -21,6 +21,7 @@
 #include <QAction>
 #include <QWidgetAction>
 #include <QSystemTrayIcon>
+#include <QStyledItemDelegate>
 #include <obs.hpp>
 #include <vector>
 #include <memory>
@@ -113,6 +114,7 @@ private:
 class OBSBasic : public OBSMainWindow {
 	Q_OBJECT
 
+	friend class OBSAbout;
 	friend class OBSBasicPreview;
 	friend class OBSBasicStatusBar;
 	friend class OBSBasicSourceSelect;
@@ -233,6 +235,9 @@ private:
 	QPointer<QVBoxLayout> programLayout;
 	QPointer<QLabel> programLabel;
 
+	QScopedPointer<QThread> patronJsonThread;
+	std::string patronJson;
+
 	void          UpdateMultiviewProjectorMenu();
 
 	void          DrawBackdrop(float cx, float cy);
@@ -323,7 +328,7 @@ private:
 	int GetTopSelectedSourceItem();
 
 	obs_hotkey_pair_id streamingHotkeys, recordingHotkeys,
-	                   replayBufHotkeys;
+	                   replayBufHotkeys, togglePreviewHotkeys;
 	obs_hotkey_id forceStreamingStopHotkey;
 
 	void InitDefaultTransitions();
@@ -437,7 +442,7 @@ public slots:
 
 	void RecordingStart();
 	void RecordStopping();
-	void RecordingStop(int code);
+	void RecordingStop(int code, QString last_error);
 
 	void StartReplayBuffer();
 	void StopReplayBuffer();
@@ -461,6 +466,8 @@ public slots:
 	bool AddSceneCollection(
 			bool create_new,
 			const QString &name = QString());
+
+	void UpdatePatronJson(const QString &text, const QString &error);
 
 private slots:
 	void AddSceneItem(OBSSceneItem item);
@@ -525,6 +532,12 @@ private slots:
 	void AudioMixerCopyFilters();
 	void AudioMixerPasteFilters();
 
+	void EnablePreview();
+	void DisablePreview();
+
+	void SceneCopyFilters();
+	void ScenePasteFilters();
+
 private:
 	/* OBS Callbacks */
 	static void SceneReordered(void *data, calldata_t *params);
@@ -563,6 +576,8 @@ public:
 
 	obs_service_t *GetService();
 	void          SetService(obs_service_t *service);
+
+	int GetTransitionDuration();
 
 	inline bool IsPreviewProgramMode() const
 	{
@@ -672,6 +687,8 @@ private slots:
 	void on_actionFitToScreen_triggered();
 	void on_actionStretchToScreen_triggered();
 	void on_actionCenterToScreen_triggered();
+	void on_actionVerticalCenter_triggered();
+	void on_actionHorizontalCenter_triggered();
 
 	void on_scenes_currentItemChanged(QListWidgetItem *current,
 			QListWidgetItem *prev);
@@ -787,7 +804,7 @@ private slots:
 	void OpenMultiviewWindow();
 	void OpenSceneWindow();
 
-	void DeferredLoad(const QString &file, int requeueCount);
+	void DeferredSysTrayLoad(int requeueCount);
 
 	void StackedMixerAreaContextMenuRequested();
 
@@ -815,4 +832,16 @@ public:
 
 private:
 	std::unique_ptr<Ui::OBSBasic> ui;
+};
+
+class SceneRenameDelegate : public QStyledItemDelegate {
+	Q_OBJECT
+
+public:
+	SceneRenameDelegate(QObject *parent);
+	virtual void setEditorData(QWidget *editor, const QModelIndex &index)
+		const override;
+
+protected:
+	virtual bool eventFilter(QObject *editor, QEvent *event) override;
 };

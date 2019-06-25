@@ -9,6 +9,7 @@ struct obs_frontend_callbacks {
 	virtual ~obs_frontend_callbacks() {}
 	virtual void *obs_frontend_get_main_window(void)=0;
 	virtual void *obs_frontend_get_main_window_handle(void)=0;
+	virtual void *obs_frontend_get_system_tray(void)=0;
 
 	virtual void obs_frontend_get_scenes(
 			struct obs_frontend_source_list *sources)=0;
@@ -20,6 +21,8 @@ struct obs_frontend_callbacks {
 	virtual obs_source_t *obs_frontend_get_current_transition(void)=0;
 	virtual void obs_frontend_set_current_transition(
 			obs_source_t *transition)=0;
+	virtual int obs_frontend_get_transition_duration(void)=0;
+	virtual void obs_frontend_set_transition_duration(int duration)=0;
 
 	virtual void obs_frontend_get_scene_collections(
 			std::vector<std::string> &strings)=0;
@@ -49,6 +52,8 @@ struct obs_frontend_callbacks {
 	virtual void *obs_frontend_add_tools_menu_qaction(const char *name)=0;
 	virtual void obs_frontend_add_tools_menu_item(const char *name,
 			obs_frontend_cb callback, void *private_data)=0;
+
+	virtual void *obs_frontend_add_dock(void *dock)=0;
 
 	virtual void obs_frontend_add_event_callback(
 			obs_frontend_event_cb callback, void *private_data)=0;
@@ -86,6 +91,8 @@ struct obs_frontend_callbacks {
 
 	virtual bool obs_frontend_preview_program_mode_active(void)=0;
 	virtual void obs_frontend_set_preview_program_mode(bool enable)=0;
+	virtual void obs_frontend_preview_program_trigger_transition(void)=0;
+
 	virtual bool obs_frontend_preview_enabled(void)=0;
 	virtual void obs_frontend_set_preview_enabled(bool enable)=0;
 
